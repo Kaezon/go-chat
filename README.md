@@ -14,25 +14,24 @@ In the future, a basic client implementation will be added.
 ```go
 import "bytes"
 import "fmt"
-import "log"
 import "github.com/kaezon/go-chat/server"
+import log "github.com/sirupsen/logrus"
 
-logBuf := bytes.Buffer
-logger := log.New(&buf, "logger: ", log.Lshortfile)
+logger := log.New()
 
-server := server.New(&logger)
+server := server.New(logger)
 
-fmt.Println("Starting server...")
+log.Info("Starting server...")
 err := server.Start(":8081")
 if err != nil {
-	fmt.Println("[ERROR] ", err)
+	log.Error("[ERROR] ", err)
 	return
 }
 
 time.Sleep(10 * time.Second)
 
-fmt.Println("Stopping server...")
+log.Info("Stopping server...")
 server.Shutdown(60)
 
-fmt.Println("--Done--")
+log.Info("--Done--")
 ```
