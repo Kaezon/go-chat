@@ -19,9 +19,6 @@ const ( // Control messages
 
 type signalRegistry map[string]map[string]chan bool
 
-// TODO: Make sure all goroutines make use of the server's WaitGroup to prevent early termination.
-// TODO: Implement clientDisconnect method for broadcasting disconnect messages
-
 // A client contains the client's connection as well as an identifier and a nick
 type client struct {
 	connection net.Conn
@@ -147,6 +144,10 @@ func (server *chatServer) addClient(newClient client) {
 	server.clients = append(server.clients, newClient)
 }
 
+func (server *chatServer) broadcastDisconnectMsg(c client, reason string) {
+	server.Broadcast(fmt.Sprintf("[SERVER] %s disconnected. Reason: %s\n", c.nickname, reason))
+}
+
 // chatServer.clientConnect handles connection events
 // This process includes geting the client's initial nickname, adding the client to the server's client list
 // and spinning chatServer.runClient() off in a goroutine.
@@ -186,10 +187,6 @@ func (server *chatServer) clientConnect(connection net.Conn) {
 		connection.Write([]byte(server.controlGlyph + disconnectMsg))
 		connection.Close()
 	}
-}
-
-func (server *chatServer) clientDisconnect(connection client, reason string) {
-	// TODO: Implement clientDisconnect or give this functionality to other methods
 }
 
 // chatServer.listen hosts the Listener.Accept() method in a loop
@@ -264,18 +261,18 @@ func (server *chatServer) readClient(c client, reader *bufio.Reader) {
 			if err, ok := err.(*net.OpError); ok {
 				if err.Timeout() {
 					server.logger.Infof("[SYSTEM] %s timed out\n", err.Source)
-					server.Broadcast(fmt.Sprintf("[SERVER] %s disconnected. Reason: connection timed out\n", c.nickname))
+					server.broadcastDisconnectMsg(c, "connection timed out")
 					break
 				} else if err.Temporary() {
 					if strings.Contains(err.Err.Error(), "forcibly closed") {
 						server.logger.Infof("[SYSTEM] %s forcibly closed connection\n", err.Source)
-						server.Broadcast(fmt.Sprintf("[SERVER] %s disconnected. Reason: forcibly closed connection\n", c.nickname))
+						server.broadcastDisconnectMsg(c, "connection closed")
 						break
 					}
 					server.logger.Errorf("[ERROR] Connection with %s threw a temporary error: %s\n", err.Source, err.Err.Error())
 				} else {
 					server.logger.Errorf("[ERROR] Connection with %s threw a generic error: %s\n", err.Source, err.Err.Error())
-					server.Broadcast(fmt.Sprintf("[SERVER] %s disconnected. Reason: generic error\n", c.nickname))
+					server.broadcastDisconnectMsg(c, "generic error")
 					break
 				}
 			} else {
