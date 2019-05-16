@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
 )
 
 const ( // Control messages
@@ -20,7 +21,6 @@ type signalRegistry map[string]map[string]chan bool
 
 // TODO: Make sure all goroutines make use of the server's WaitGroup to prevent early termination.
 // TODO: Implement clientDisconnect method for broadcasting disconnect messages
-// TODO: Find a logger implementation
 
 // A client contains the client's connection as well as an identifier and a nick
 type client struct {
@@ -41,6 +41,7 @@ type chatServer struct {
 	commandGlyph string
 	controlGlyph string
 	commands     map[string]CommandProcessor
+	logger       *log.Logger
 
 	joinTimeout         int
 	maxNickLen          int
@@ -100,7 +101,7 @@ func (server *chatServer) Shutdown(waitTime int) {
 	// Closing the listener here causes Accept() to throw an error, letting chatServer.listen() exit
 	server.listener.Close()
 
-	fmt.Printf("[SYSTEM] Shutdown called with a %d second delay", waitTime)
+	server.logger.Infof("[SYSTEM] Shutdown called with a %d second delay", waitTime)
 	if waitTime > 0 {
 		server.Broadcast("[SERVER] The server will shut down in %d seconds!")
 		time.Sleep(time.Duration(waitTime) * time.Second)
@@ -115,10 +116,10 @@ func (server *chatServer) Shutdown(waitTime int) {
 
 	select {
 	case <-done:
-		fmt.Println("[SERVER] All threads stoped. Shutting down.")
+		server.logger.Info("[SERVER] All threads stoped. Shutting down.")
 		return
 	case <-time.After(time.Duration(server.shutdownGracePeriod) * time.Second):
-		fmt.Println("[SERVER] Shutdown grace period expired!")
+		server.logger.Warn("[SERVER] Shutdown grace period expired!")
 		return
 	}
 }
@@ -181,7 +182,7 @@ func (server *chatServer) clientConnect(connection net.Conn) {
 		server.addClient(newClient)
 		go server.runClient(newClient)
 	case <-time.After(time.Duration(server.joinTimeout) * time.Second):
-		fmt.Printf("[SYSTEM] %s timed out while joining\n", connection.RemoteAddr().String())
+		server.logger.Infof("[SYSTEM] %s timed out while joining\n", connection.RemoteAddr().String())
 		connection.Write([]byte(server.controlGlyph + disconnectMsg))
 		connection.Close()
 	}
@@ -207,14 +208,14 @@ func (server *chatServer) listen() {
 					break // Listener was closed, so the thread needs to stop
 				}
 			} else {
-				fmt.Printf("[ERROR] Unhandled error in server listen thread! %T, %s", err, err.Err.Error())
+				server.logger.Errorf("[ERROR] Unhandled error in server listen thread! %T, %s", err, err.Err.Error())
 				break
 			}
 		}
-		fmt.Printf("[SYSTEM] Incomming connection from %s\n", conn.RemoteAddr().String())
+		server.logger.Infof("[SYSTEM] Incomming connection from %s\n", conn.RemoteAddr().String())
 		go server.clientConnect(conn)
 	}
-	fmt.Println("[SYSTEM] Server listen thread is stopping")
+	server.logger.Info("[SYSTEM] Server listen thread is stopping")
 }
 
 // chatServer.processMessage handles incomming messages from clients
@@ -222,7 +223,7 @@ func (server *chatServer) listen() {
 // If a handler is not registered for the command, the user will be sent an error message.
 // If the message does not start with a command glyph, it will be sent to all connected clients.
 func (server *chatServer) processMessage(message string, source client) (ok bool, err error) {
-	fmt.Printf("%s: %s", source.nickname, message)
+	server.logger.Infof("%s: %s", source.nickname, message)
 	if strings.HasPrefix(message, server.commandGlyph) {
 		commandString := strings.Split(message, " ")
 		command := strings.TrimLeft(commandString[0], server.commandGlyph)
@@ -235,14 +236,14 @@ func (server *chatServer) processMessage(message string, source client) (ok bool
 				case unknownCommand:
 					server.DistributeMessage("[SERVER] Got unknown command "+commandString[0], distributionList[:])
 				default:
-					fmt.Printf("[SYSTEM] Encountered error of type %T", err)
+					server.logger.Errorf("[SYSTEM] Encountered error of type %T", err)
 					server.DistributeMessage("[SERVER] Unable to process command", distributionList[:])
 				}
 			}
 		}
 		return true, nil
 	} else if strings.HasPrefix(message, server.controlGlyph) {
-		fmt.Printf("[SYSTEM] Incomming message from %s started with control glyph!\n", source.connection.RemoteAddr().String())
+		server.logger.Warnf("[SYSTEM] Incomming message from %s started with control glyph!\n", source.connection.RemoteAddr().String())
 		distributionList := [1]client{source}
 		server.DistributeMessage("[SERVER] Unable to process message", distributionList[:])
 	}
@@ -262,24 +263,24 @@ func (server *chatServer) readClient(c client, reader *bufio.Reader) {
 		if err != nil {
 			if err, ok := err.(*net.OpError); ok {
 				if err.Timeout() {
-					fmt.Printf("[SYSTEM] %s timed out\n", err.Source)
+					server.logger.Infof("[SYSTEM] %s timed out\n", err.Source)
 					server.Broadcast(fmt.Sprintf("[SERVER] %s disconnected. Reason: connection timed out\n", c.nickname))
 					break
 				} else if err.Temporary() {
 					if strings.Contains(err.Err.Error(), "forcibly closed") {
-						fmt.Printf("[SYSTEM] %s forcibly closed connection\n", err.Source)
+						server.logger.Infof("[SYSTEM] %s forcibly closed connection\n", err.Source)
 						server.Broadcast(fmt.Sprintf("[SERVER] %s disconnected. Reason: forcibly closed connection\n", c.nickname))
 						break
 					}
-					fmt.Printf("[ERROR] Connection with %s threw a temporary error: %s\n", err.Source, err.Err.Error())
+					server.logger.Errorf("[ERROR] Connection with %s threw a temporary error: %s\n", err.Source, err.Err.Error())
 				} else {
-					fmt.Printf("[ERROR] Connection with %s threw a generic error: %s\n", err.Source, err.Err.Error())
+					server.logger.Errorf("[ERROR] Connection with %s threw a generic error: %s\n", err.Source, err.Err.Error())
 					server.Broadcast(fmt.Sprintf("[SERVER] %s disconnected. Reason: generic error\n", c.nickname))
 					break
 				}
 			} else {
-				fmt.Printf("[ERROR] Got error while reading from %s: %T\n", c.connection.RemoteAddr(), err)
-				fmt.Println("[ERROR] Details: ", err.Error())
+				server.logger.Errorf("[ERROR] Got error while reading from %s: %T\n", c.connection.RemoteAddr(), err)
+				server.logger.Errorf("[ERROR] Details: ", err.Error())
 				break
 			}
 		}
@@ -306,9 +307,9 @@ func (server *chatServer) registerSignal(signalName string, signal chan bool) st
 // chatServer.removeSignal safely removes a signal from the server's signal registry
 func (server *chatServer) removeSignal(signalName string, signalID string) {
 	if _, ok := server.signals[signalName]; !ok {
-		fmt.Printf("[SYSTEM] Could not find signal named \"%s\" to remove signal with ID %s!\n", signalName, signalID)
+		server.logger.Errorf("[SYSTEM] Could not find signal named \"%s\" to remove signal with ID %s!\n", signalName, signalID)
 	} else if _, ok := server.signals[signalName][signalID]; !ok {
-		fmt.Printf("[SYSTEM] Could not find signalID %s in signal named \"%s\" for removal!\n", signalID, signalName)
+		server.logger.Errorf("[SYSTEM] Could not find signalID %s in signal named \"%s\" for removal!\n", signalID, signalName)
 	} else {
 		delete(server.signals[signalName], signalID)
 	}
@@ -346,9 +347,9 @@ func (server *chatServer) runClient(source client) {
 // chatServer.sendSignal pushes true to all channels registered under the passed signal name
 func (server *chatServer) sendSignal(signalName string) {
 	if _, ok := server.signals[signalName]; !ok {
-		fmt.Printf("[SYSTEM] Could not find signal named \"%s\" to send!\n", signalName)
+		server.logger.Errorf("[SYSTEM] Could not find signal named \"%s\" to send!\n", signalName)
 	} else {
-		fmt.Printf("[SYSTEM] Sending signal to %d signals under \"%s\"\n", len(server.signals[signalName]), signalName)
+		server.logger.Infof("[SYSTEM] Sending signal to %d signals under \"%s\"\n", len(server.signals[signalName]), signalName)
 		for _, signal := range server.signals[signalName] {
 			signal <- true
 		}
@@ -373,13 +374,15 @@ func (server *chatServer) validateNickname(nickname string) (valid bool) {
 }
 
 // New returns a new Server interface
-func New() Server {
+func New(logger *log.Logger) Server {
+
 	return &chatServer{
 		listener:     nil,
 		clients:      []client{},
 		commandGlyph: "/",
 		controlGlyph: "\000",
 		commands:     make(map[string]CommandProcessor),
+		logger:       logger,
 
 		joinTimeout:         60,
 		maxNickLen:          32,

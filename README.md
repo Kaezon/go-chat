@@ -12,10 +12,15 @@ In the future, a basic client implementation will be added.
 ## Usage
 
 ```go
-import  "fmt"
+import "bytes"
+import "fmt"
+import "log"
 import "github.com/kaezon/go-chat/server"
 
-server := server.New()
+logBuf := bytes.Buffer
+logger := log.New(&buf, "logger: ", log.Lshortfile)
+
+server := server.New(&logger)
 
 fmt.Println("Starting server...")
 err := server.Start(":8081")
