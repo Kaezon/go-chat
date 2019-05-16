@@ -12,7 +12,6 @@ In the future, a basic client implementation will be added.
 ## Usage
 
 ```go
-import "bytes"
 import "fmt"
 import "github.com/kaezon/go-chat/server"
 import log "github.com/sirupsen/logrus"
